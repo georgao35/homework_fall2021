@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 from .base_agent import BaseAgent
 from cs285.policies.MLP_policy import MLPPolicyPG
@@ -45,10 +46,13 @@ class PGAgent(BaseAgent):
         # HINT1: use helper functions to compute qvals and advantages
         # HINT2: look at the MLPPolicyPG class for how to update the policy
             # and obtain a train_log
+        q_vals = self.calculate_q_vals(rewards_list)
+        advantages = self.estimate_advantage(observations, rewards_list, q_vals, terminals)
+        train_log = self.actor.update(observations, actions, advantages, q_vals)
 
         return train_log
 
-    def calculate_q_vals(self, rewards_list):
+    def calculate_q_vals(self, rewards_list) -> np.ndarray:
 
         """
             Monte Carlo estimation of the Q function.
@@ -70,12 +74,12 @@ class PGAgent(BaseAgent):
         # ordering as observations, actions, etc.
 
         if not self.reward_to_go:
-            TODO
+            q_values = np.concatenate([self._discounted_return(rewards) for rewards in rewards_list])
 
         # Case 2: reward-to-go PG
         # Estimate Q^{pi}(s_t, a_t) by the discounted sum of rewards starting from t
         else:
-            TODO
+            q_values = np.concatenate([self._discounted_cumsum(rewards) for rewards in rewards_list])
 
         return q_values
 
@@ -95,7 +99,7 @@ class PGAgent(BaseAgent):
             ## TODO: values were trained with standardized q_values, so ensure
                 ## that the predictions have the same mean and standard deviation as
                 ## the current batch of q_values
-            values = TODO
+            values = values_unnormalized * np.std(q_values) + np.mean(q_values)
 
             if self.gae_lambda is not None:
                 ## append a dummy T+1 value for simpler recursive calculation
@@ -117,13 +121,15 @@ class PGAgent(BaseAgent):
                         ## 0 otherwise.
                     ## HINT 2: self.gae_lambda is the lambda value in the
                         ## GAE formula
+                    delta = rews[i] + self.gae_lambda * values[i+1] * terminals[i+1] - values[i]
+                    advantages[i] = delta + self.gamma * self.gae_lambda * advantages[i+1]
 
                 # remove dummy advantage
                 advantages = advantages[:-1]
 
             else:
                 ## TODO: compute advantage estimates using q_values, and values as baselines
-                advantages = TODO
+                advantages = q_values - values
 
         # Else, just set the advantage to [Q]
         else:
@@ -133,7 +139,8 @@ class PGAgent(BaseAgent):
         if self.standardize_advantages:
             ## TODO: standardize the advantages to have a mean of zero
             ## and a standard deviation of one
-            advantages = TODO
+            mean, std = advantages.mean(), advantages.std()
+            advantages = (advantages - mean) / std
 
         return advantages
 
@@ -150,7 +157,7 @@ class PGAgent(BaseAgent):
     ################## HELPER FUNCTIONS #################
     #####################################################
 
-    def _discounted_return(self, rewards):
+    def _discounted_return(self, rewards) -> np.ndarray:
         """
             Helper function
 
@@ -160,10 +167,13 @@ class PGAgent(BaseAgent):
         """
 
         # TODO: create list_of_discounted_returns
+        coef = np.power(self.gamma, np.arange(0, len(rewards)))
+        discounted_rewards = np.array(rewards) * coef
+        discounted_return = discounted_rewards.sum()
 
-        return list_of_discounted_returns
+        return discounted_return * np.ones_like(discounted_rewards)
 
-    def _discounted_cumsum(self, rewards):
+    def _discounted_cumsum(self, rewards) -> np.ndarray:
         """
             Helper function which
             -takes a list of rewards {r_0, r_1, ..., r_t', ... r_T},
@@ -173,5 +183,8 @@ class PGAgent(BaseAgent):
         # TODO: create `list_of_discounted_returns`
         # HINT: it is possible to write a vectorized solution, but a solution
             # using a for loop is also fine
+        rank = np.arange(0, len(rewards))
+        exp = rank - rank[:, None]
+        coef = np.triu(np.power(self.gamma, exp))
 
-        return list_of_discounted_cumsums
+        return coef @ np.array(rewards)
